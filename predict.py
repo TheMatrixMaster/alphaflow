@@ -1,15 +1,20 @@
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--input_csv', type=str, default='splits/transporters_only.csv')
+parser.add_argument('--input_csv', type=str, default=None)
+parser.add_argument('--fasta', type=str, default=None, help='fasta file to sequences')
+
 parser.add_argument('--templates_dir', type=str, default=None)
 parser.add_argument('--msa_dir', type=str, default='./alignment_dir')
+
 parser.add_argument('--mode', choices=['alphafold', 'esmfold'], default='alphafold')
 parser.add_argument('--samples', type=int, default=10)
 parser.add_argument('--steps', type=int, default=10)
 parser.add_argument('--outpdb', type=str, default='./outpdb/default')
+
 parser.add_argument('--weights', type=str, default=None)
 parser.add_argument('--ckpt', type=str, default=None)
 parser.add_argument('--original_weights', action='store_true')
+
 parser.add_argument('--pdb_id', nargs='*', default=[])
 parser.add_argument('--subsample', type=int, default=None)
 parser.add_argument('--resample', action='store_true')
@@ -19,12 +24,14 @@ parser.add_argument('--self_cond', action='store_true', default=False)
 parser.add_argument('--noisy_first', action='store_true', default=False)
 parser.add_argument('--runtime_json', type=str, default=None)
 parser.add_argument('--no_overwrite', action='store_true', default=False)
+
 args = parser.parse_args()
 
 import torch, tqdm, os, wandb, json, time
 import pandas as pd
 import pytorch_lightning as pl
 import numpy as np
+from Bio import SeqIO
 from collections import defaultdict
 from alphaflow.data.data_modules import collate_fn
 from alphaflow.model.wrapper import AlphaFoldWrapper, ESMFoldWrapper
@@ -58,6 +65,14 @@ if args.subsample: # https://elifesciences.org/articles/75751#s3
 
 @torch.no_grad()
 def main():
+    if args.fasta and not args.input_csv:
+        assert os.path.exists(args.fasta), f"File not found: {args.fasta}"
+        seqs = list(SeqIO.parse(args.fasta, "fasta"))
+        df = pd.DataFrame([{'name': seq.id, 'seqres': seq.seq.__str__()} for seq in seqs])
+        df.to_csv('/tmp/tmp.csv', index=False)
+        args.input_csv = '/tmp/tmp.csv'
+    
+    assert os.path.exists(args.input_csv), f"File not found: {args.input_csv}"
 
     valset = {
         'alphafold': AlphaFoldCSVDataset,
@@ -108,7 +123,7 @@ def main():
             continue
         if args.no_overwrite and os.path.exists(f'{args.outpdb}/{item["name"]}.pdb'):
             continue
-        result = []
+
         for j in tqdm.trange(args.samples):
             if args.subsample or args.resample:
                 item = valset[i] # resample MSA
@@ -119,13 +134,12 @@ def main():
             prots = model.inference(batch, as_protein=True, noisy_first=args.noisy_first,
                         no_diffusion=args.no_diffusion, schedule=schedule, self_cond=args.self_cond)
             runtime[item['name']].append(time.time() - start)
-            result.append(prots[-1])
             
-
-
-        with open(f'{args.outpdb}/{item["name"]}.pdb', 'w') as f:
-            f.write(protein.prots_to_pdb(result))
-
+            # save the results
+            with open(f'{args.outpdb}/conformer-{j}.pdb', 'w') as f:
+                prot = protein.to_pdb(prots[-1])
+                f.write(prot)
+            
     if args.runtime_json:
         with open(args.runtime_json, 'w') as f:
             f.write(json.dumps(dict(runtime)))

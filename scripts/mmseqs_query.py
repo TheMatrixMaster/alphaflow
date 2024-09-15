@@ -2,7 +2,8 @@
 
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument('--split', type=str, required=True)
+parser.add_argument('--split', type=str, default=None, help='csv file to sequences')
+parser.add_argument('--fasta', type=str, default=None, help='fasta file to sequences')
 parser.add_argument('--outdir', type=str, default='./alignment_dir') 
 args = parser.parse_args()
 
@@ -15,6 +16,7 @@ import logging
 import tarfile
 import pandas as pd
 from tqdm import tqdm
+from Bio import SeqIO
 logger = logging.getLogger(__name__)
 
 TQDM_BAR_FORMAT = '{l_bar}{bar}| {n_fmt}/{total_fmt} [elapsed: {elapsed} remaining: {remaining}]'
@@ -281,7 +283,15 @@ def run_mmseqs2(x, prefix, use_env=True, use_filter=True,
 
   return (a3m_lines, template_paths) if use_templates else a3m_lines
 
-df = pd.read_csv(args.split, index_col='name')
+if args.fasta:
+  assert os.path.exists(args.fasta)
+  seqs = list(SeqIO.parse(args.fasta, 'fasta'))
+  df = pd.DataFrame([{'name': seq.id, 'seqres': seq.seq.__str__()} for seq in seqs])
+  df.set_index('name', inplace=True)
+else:
+  assert os.path.exists(args.split)
+  df = pd.read_csv(args.split, index_col='name')
+
 os.makedirs(args.outdir, exist_ok=True)
 
 msas = run_mmseqs2(list(df.seqres), prefix='/tmp/', user_agent='bjing2016/alphaflow')
